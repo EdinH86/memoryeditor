@@ -32,28 +32,64 @@ class Plugin:
         if decky is not None:
             await decky.emit(event, *args)
 
+    # System processes we never want to show in the picker. Matched against the
+    # executable *basename* (see _is_blacklisted), not the whole command line,
+    # so a path or argument that merely contains one of these words can't hide
+    # a real game (e.g. a Proton game whose command references .../system32/...).
+    _PROC_BLACKLIST = [
+        "ps", "systemd", "reaper", "pressure-vessel", "proton",
+        "power-button-handler", "ibus", "xbindkeys", "wineserver", "socat",
+        "sd-pam", "gamemoded", "sdgyrodsu", "dbus-daemon", "kwalletd5",
+        "gamescope", "gamescope-session", "PluginLoader", "pipewire",
+        "Xwayland", "wireplumber", "sshd", "mangoapp", "steamwebhelper",
+        "steam", "xdg-desktop-portal", "xdg-document-portal",
+        "xdg-permission-store", "bash", "steamos-devkit-service",
+        "dconf-service", "CrashHandler", "ControllerTools",
+    ]
+
+    @classmethod
+    def _is_blacklisted(cls, exe):
+        # Match an exact executable name or a "<name>-..." family member
+        # (systemd -> systemd-journald, ibus -> ibus-daemon, etc.)
+        exe = exe.lower()
+        for entry in cls._PROC_BLACKLIST:
+            entry = entry.lower()
+            if exe == entry or exe.startswith(entry + "-"):
+                return True
+        return False
+
     # Method to return list of process names and PIDs on the system.
     async def get_processes(self):
         logger.info("Getting processes")
 
         process_list = []
 
-        # Get a list of processes using ps for the current user, we need the PID and the untruncated process name.
+        # PID and full command line for every process owned by the deck user
         output = subprocess.check_output(
             ["ps", "-u", "1000", "-o", "pid,command"])
 
-        # Blacklist some processes
-        blacklist = ["ps ", "systemd", "reaper ", "pressure-vessel", "proton ", "power-button-handler", "ibus", "xbindkeys", "COMMAND", "wineserver", "system32", "socat", "sd-pam", "gamemoded", 
-        "sdgyrodsu", "dbus-daemon", "kwalletd5", "gamescope-session", "gamescope", "PluginLoader", "pipewire", "Xwayland", "wireplumber", "ibus-daemon", "sshd", "mangoapp", "steamwebhelper", "steam ", 
-        "xdg-desktop-portal", "xdg-document-portal", "xdg-permission-store", "bash", "steamos-devkit-service", "dconf-service", "CrashHandler", "ControllerTools"]
+        lines = output.decode(errors="replace").splitlines()
+        # Drop the "PID COMMAND" header row if present
+        if lines and ("COMMAND" in lines[0].upper() or lines[0].strip().upper().startswith("PID")):
+            lines = lines[1:]
 
-        # Parse output
-        for line in output.splitlines():
-            pid, name = line.decode().split(None, 1)
+        for line in lines:
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            pid, command = parts
 
-            # If the name doesn't contain any string from the blacklist, append it
-            if not any(x in name for x in blacklist):
-                process_list.append({"pid": int(pid), "name": name})
+            # Basename of argv[0]; handle both / and \ (wine/Proton paths)
+            argv0 = command.split()[0]
+            exe = argv0.replace("\\", "/").rsplit("/", 1)[-1]
+
+            if self._is_blacklisted(exe):
+                continue
+
+            try:
+                process_list.append({"pid": int(pid), "name": command})
+            except ValueError:
+                continue
 
         return process_list
 
@@ -219,7 +255,16 @@ class Plugin:
         return True
 
     @staticmethod
-    def _build_uservalue(value_str, value_type):
+    def _parse_int(value_str):
+        # Accept 0x.. / 0o.. / 0b.. and plain decimal (including leading zeros),
+        # so hex entry works for every integer type, signed or unsigned.
+        try:
+            return int(value_str, 0)
+        except ValueError:
+            return int(value_str)  # ValueError here is handled by the caller
+
+    @classmethod
+    def _build_uservalue(cls, value_str, value_type):
         '''
             Build a UserValue from a search string, either auto-detected or
             forced to a concrete c-type. Returns the UserValue, or None if the
@@ -233,28 +278,28 @@ class Plugin:
             match value_type:
                 case "c_int8":
                     val.flags |= MatchFlag.FLAG_S8B
-                    val.int8_value = int(value_str)
+                    val.int8_value = cls._parse_int(value_str)
                 case "c_uint8":
                     val.flags |= MatchFlag.FLAG_U8B
-                    val.uint8_value = int(value_str, 0)
+                    val.uint8_value = cls._parse_int(value_str)
                 case "c_int16":
                     val.flags |= MatchFlag.FLAG_S16B
-                    val.int16_value = int(value_str)
+                    val.int16_value = cls._parse_int(value_str)
                 case "c_uint16":
                     val.flags |= MatchFlag.FLAG_U16B
-                    val.uint16_value = int(value_str, 0)
+                    val.uint16_value = cls._parse_int(value_str)
                 case "c_int32":
                     val.flags |= MatchFlag.FLAG_S32B
-                    val.int32_value = int(value_str)
+                    val.int32_value = cls._parse_int(value_str)
                 case "c_uint32":
                     val.flags |= MatchFlag.FLAG_U32B
-                    val.uint32_value = int(value_str, 0)
+                    val.uint32_value = cls._parse_int(value_str)
                 case "c_int64":
                     val.flags |= MatchFlag.FLAG_S64B
-                    val.int64_value = int(value_str)
+                    val.int64_value = cls._parse_int(value_str)
                 case "c_uint64":
                     val.flags |= MatchFlag.FLAG_U64B
-                    val.uint64_value = int(value_str, 0)
+                    val.uint64_value = cls._parse_int(value_str)
                 case "c_float":
                     val.flags |= MatchFlag.FLAG_F32B
                     val.float32_value = float(value_str)
@@ -348,6 +393,9 @@ class Plugin:
         if self.is_scanning:
             logger.warning("Search requested while a scan is already running")
             return False
+
+        # Strip CR/LF so the value can't inject a second scanmem command
+        searchValue = searchValue.replace("\r", "").replace("\n", "")
         if not searchValue:
             return False
 

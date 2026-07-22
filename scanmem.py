@@ -22,8 +22,8 @@ from ctypes import *
 absolute_path = os.path.dirname(__file__)
 libfile = os.path.join(absolute_path, "bin", "libscanmem.so.1.0.0")
 
-if libfile is None:
-    raise OSError("Failed to find scanmem shared object.")
+if not os.path.exists(libfile):
+    raise OSError("Failed to find scanmem shared object at %s" % libfile)
 
 # backend initialization
 backend = CDLL(libfile)
@@ -372,7 +372,8 @@ backend.sm_readmaps.restype = c_bool
 class Scanmem():
     def __init__(self):
         self.globals = Globals.in_dll(backend, "sm_globals")
-        self.globals.options.debug = 1
+        # 0 = quiet; libscanmem's debug mode is very chatty in the Decky log
+        self.globals.options.debug = 0
         self.globals_ptr = pointer(self.globals)
         self.are_commands_initialized = False
 
