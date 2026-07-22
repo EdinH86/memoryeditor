@@ -359,9 +359,6 @@ class Plugin:
         return await self._run_scan(
             lambda: self.scanmem.exec_command('" ' + searchValue))
 
-    async def search(self, operator, value):
-        return self.scanmem.exec_command(operator + " " + value)
-
     # Ask a running scan to stop; matches found so far are kept
     async def stop_scan(self):
         if self.is_scanning:

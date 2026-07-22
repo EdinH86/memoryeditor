@@ -375,7 +375,6 @@ class Scanmem():
         self.globals.options.debug = 1
         self.globals_ptr = pointer(self.globals)
         self.are_commands_initialized = False
-        print(self.globals)
 
     def __del__(self):
         if getattr(self, 'are_commands_initialized', False):

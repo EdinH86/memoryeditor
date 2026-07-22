@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CameronRedmore/memory-deck.git"
+    "url": "git+https://github.com/EdinH86/memoryeditor.git"
   },
   "keywords": [
     "decky",
@@ -20,13 +20,14 @@
   ],
   "author": "Camzie99 <credmore99@gmail.com>",
   "contributors": [
-    "HeyItsWaters <iwaters1023@gmail.com>"
+    "HeyItsWaters <iwaters1023@gmail.com>",
+    "EdinH86"
   ],
   "license": "GPL-3.0",
   "bugs": {
-    "url": "https://github.com/CameronRedmore/memory-deck/issues"
+    "url": "https://github.com/EdinH86/memoryeditor/issues"
   },
-  "homepage": "https://github.com/CameronRedmore/memory-deck#readme",
+  "homepage": "https://github.com/EdinH86/memoryeditor#readme",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
     "@decky/ui": "^4.11.0",

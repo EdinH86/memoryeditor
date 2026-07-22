@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Build caches
+.rollup.cache/
+*.tsbuildinfo
+
+# Logs / OS cruft
+*.log
+.DS_Store
+Thumbs.db
+
+# Note: dist/ is intentionally committed — it's the installable plugin artifact.
