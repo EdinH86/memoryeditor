@@ -14,4 +14,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Release archives (built on demand, not tracked)
+*.zip
+
 # Note: dist/ is intentionally committed — it's the installable plugin artifact.
