@@ -5,9 +5,10 @@ node_modules/
 __pycache__/
 *.py[cod]
 
-# Build caches
+# Build caches / sourcemaps
 .rollup.cache/
 *.tsbuildinfo
+dist/*.map
 
 # Logs / OS cruft
 *.log

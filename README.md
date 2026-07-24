@@ -99,6 +99,26 @@ the process list, so you usually don't have to hunt through the full list.
 If you want to reset the scan, you can press the `Reset Scan` button at the top of the page.
 This will reset the scan and empty out all known values. This allows you to then start another initial scan.
 
+## Memory Workbench
+For a Cheat-Engine-style experience, press `Open Memory Workbench` in the QAM
+(shown once a process is attached) to open a full-screen page with:
+
+- **Address list** — add addresses by absolute value (`0x…`) or by
+  `module + offset`, give each a label and a type, and watch its live value.
+  Set a new value, freeze/unfreeze, or view it in the hex viewer per row.
+- **Memory viewer** — a hex + ASCII dump of any address.
+- **Cheat tables** — Save/Reload/Delete a table of addresses per game
+  (keyed by its Steam App ID), so your list is there next time.
+- **Static tagging** — addresses that live inside a loaded module are labelled
+  with the module name.
+
+You can also press `Add to Workbench` on any search result to drop it into the
+saved table.
+
+> Note: found addresses are not guaranteed to be the same after the game
+> restarts (ASLR). Saved tables preserve your labels/types; re-find the address
+> in a new session, or use `module + offset` for addresses inside a module.
+
 ## Installation
 This is a personal project and is installed manually (not via any plugin store).
 
@@ -124,7 +144,9 @@ sudo systemctl restart plugin_loader
 - [x] Hex value entry on the numpad
 - [x] Range operator support
 - [x] Search for strings
-- [ ] Allow saving of found addresses / game to enable easier editing of values later
+- [x] Memory workbench: address list, hex viewer, save/load cheat tables per game
+- [ ] Pointer scanning (static pointer chains that survive restarts)
+- [ ] AOB / byte-pattern scanning
 
 # License
 This project is licensed under the GPL-3.0 License - see the [LICENSE](LICENSE) file for details.

@@ -5,6 +5,7 @@ import {
   DropdownItem,
   TextField,
   ProgressBarWithInfo,
+  Navigation,
   staticClasses,
   gamepadDialogClasses,
   joinClassNames,
@@ -13,7 +14,7 @@ import {
 import {
   addEventListener,
   removeEventListener,
-  callable,
+  routerHook,
   definePlugin,
   toaster,
 } from "@decky/api";
@@ -23,31 +24,32 @@ import { Fragment, useEffect, useRef, useState, ReactNode } from "react";
 import { FaMagic } from "react-icons/fa";
 
 import { NumpadInput } from "./components/NumpadInput";
+import { Workbench } from "./workbench/Workbench";
 import { playSound } from "./util/util";
+import {
+  Process,
+  Result,
+  Value,
+  FrozenEntry,
+  formatValue,
+  getProcesses,
+  getRunningGame,
+  getAttachedProcess,
+  attachToProcess,
+  resetScanmem,
+  searchRegions,
+  searchString,
+  getMatches,
+  readValues,
+  setValueAt,
+  stopScan,
+  freezeValue,
+  unfreezeValue,
+  getFrozen,
+  addTableEntry,
+} from "./api";
 
-interface Process {
-  name: string;
-  pid: number;
-}
-
-type Value = number | string | null;
-
-interface Result {
-  match_index: number;
-  first_byte_in_child: number;
-  address: string;
-  value: Value;
-  value_type: string;
-  match_info: number;
-  number_of_bytes: number;
-  variable_bytes: number[];
-}
-
-interface FrozenEntry {
-  address: string;
-  value: string;
-  value_type: string;
-}
+const WORKBENCH_ROUTE = "/memoryeditor/workbench";
 
 interface UndoEntry {
   address: string;
@@ -55,34 +57,6 @@ interface UndoEntry {
   value_type: string;
   oldValue: Value;
 }
-
-// Backend bindings (main.py) — arguments are passed positionally
-const getProcesses = callable<[], Process[]>("get_processes");
-const getRunningGame = callable<[], Process | null>("get_running_game");
-const getAttachedProcess = callable<[], Process | null>("get_attached_process");
-const attachToProcess = callable<[pid: number, name: string], void>("attach");
-const resetScanmem = callable<[], void>("reset_scanmem");
-const searchRegions = callable<
-  [match_type: number, searchValue: string, searchValueType: string, rangeEnd: string],
-  number | false
->("search_regions");
-const searchString = callable<[searchValue: string], number | false>("search_string");
-const getMatches = callable<[], Result[]>("get_matches");
-const readValues = callable<
-  [items: { address: string; value_type: string; number_of_bytes: number }[]],
-  Record<string, Value>
->("read_values");
-const setValueAt = callable<
-  [address: string, match_index: number, value: string],
-  boolean
->("set_value");
-const stopScan = callable<[], boolean>("stop_scan");
-const freezeValue = callable<
-  [address: string, value: string, value_type: string],
-  boolean
->("freeze");
-const unfreezeValue = callable<[address: string], boolean>("unfreeze");
-const getFrozen = callable<[], FrozenEntry[]>("get_frozen");
 
 const FieldWithSeparator = joinClassNames(
   gamepadDialogClasses.Field,
@@ -131,23 +105,6 @@ const RESULTS_LIMIT = 10;
 const REFRESH_INTERVAL = 1200;
 // Cap on the undo history
 const UNDO_LIMIT = 20;
-
-// Trim float representation noise for display (0.10000000149011612 -> 0.1)
-const formatValue = (value: Value, value_type: string): string => {
-  if (value === null) {
-    return "?";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value_type === "float32") {
-    return String(Number(value.toPrecision(7)));
-  }
-  if (value_type === "float64") {
-    return String(Number(value.toPrecision(15)));
-  }
-  return String(value);
-};
 
 function Content() {
   const [processList, setProcessList] = useState<Process[]>([]);
@@ -392,6 +349,27 @@ function Content() {
     }
   };
 
+  const addToWorkbench = async (result: Result) => {
+    try {
+      await addTableEntry({
+        label: `${result.value_type} @ ${result.address}`,
+        address: result.address,
+        value_type: result.value_type,
+        module: null,
+        offset: null,
+      });
+      toaster.toast({ title: "MemoryEditor", body: "Added to workbench table." });
+    } catch (e) {
+      console.error("memory-editor: addTableEntry failed", e);
+      toaster.toast({ title: "MemoryEditor", body: "Failed to add to workbench." });
+    }
+  };
+
+  const openWorkbench = () => {
+    Navigation.Navigate(WORKBENCH_ROUTE);
+    Navigation.CloseSideMenus();
+  };
+
   const showResults = numberOfMatches > 0 && numberOfMatches <= RESULTS_LIMIT && results.length > 0;
   // Re-subscribe the refresh loop only when the *set* of addresses changes,
   // not on every value tick, so the interval isn't constantly torn down.
@@ -519,6 +497,11 @@ function Content() {
       <PanelSectionRow>
         <ButtonItem layout="below" disabled={scanning} onClick={() => reset()}>
           Reset Search
+        </ButtonItem>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem layout="below" onClick={() => openWorkbench()}>
+          Open Memory Workbench
         </ButtonItem>
       </PanelSectionRow>
     </PanelSection>
@@ -650,6 +633,11 @@ function Content() {
                     {isFrozen ? "Unfreeze" : "Freeze"}
                   </ButtonItem>
                 </PanelSectionRow>
+                <PanelSectionRow>
+                  <ButtonItem layout="below" onClick={() => addToWorkbench(result)}>
+                    Add to Workbench
+                  </ButtonItem>
+                </PanelSectionRow>
               </>
             )}
           </Fragment>
@@ -697,12 +685,16 @@ function Content() {
 }
 
 export default definePlugin(() => {
+  routerHook.addRoute(WORKBENCH_ROUTE, Workbench, { exact: true });
+
   return {
     name: "MemoryEditor",
     titleView: <div className={staticClasses.Title}>MemoryEditor</div>,
     content: <Content />,
     icon: <FaMagic />,
     alwaysRender: true,
-    onDismount() {},
+    onDismount() {
+      routerHook.removeRoute(WORKBENCH_ROUTE);
+    },
   };
 });

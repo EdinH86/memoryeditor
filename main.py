@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import asyncio
 import subprocess
 # Little hack to allow importing of files after Decky has loaded the plugin.
@@ -206,16 +207,172 @@ class Plugin:
 
         return result
 
+    # ---- Workbench: arbitrary addresses, modules, cheat tables ----------
+
+    @staticmethod
+    def _parse_app_id(environ_bytes):
+        for kv in environ_bytes.split(b"\x00"):
+            if kv.startswith(b"SteamAppId="):
+                return kv.split(b"=", 1)[1].decode(errors="replace")
+        return None
+
+    @classmethod
+    def _read_app_id(cls, pid):
+        # SteamAppId from the process environment; keys the saved cheat table
+        try:
+            with open("/proc/%d/environ" % pid, "rb") as f:
+                return cls._parse_app_id(f.read())
+        except OSError:
+            return None
+
+    @staticmethod
+    def _parse_maps(text):
+        module_base = {}
+        maps = []
+        for line in text.splitlines():
+            parts = line.split(None, 5)
+            if len(parts) < 6:
+                continue
+            path = parts[5].strip()
+            if not path.startswith("/"):
+                continue  # skip anonymous / special mappings
+            start_s, _, end_s = parts[0].partition("-")
+            try:
+                start = int(start_s, 16)
+                end = int(end_s, 16)
+            except ValueError:
+                continue
+            name = os.path.basename(path)
+            maps.append([start, end, name])
+            if name not in module_base or start < module_base[name]:
+                module_base[name] = start
+
+        modules = [{"name": n, "base": b} for n, b in
+                   sorted(module_base.items(), key=lambda kv: kv[1])]
+        return {"modules": modules, "maps": maps}
+
+    async def get_modules(self):
+        '''
+            File-backed mappings of the target, from /proc/<pid>/maps.
+            `modules` lists one entry per file at its lowest load address (for
+            the module+offset picker); `maps` is every file-backed range so the
+            UI can tag "static" addresses that live inside a loaded module.
+        '''
+        pid = getattr(self, 'pid', None)
+        if not pid:
+            return {"modules": [], "maps": []}
+        try:
+            with open("/proc/%d/maps" % pid) as f:
+                text = f.read()
+        except OSError:
+            return {"modules": [], "maps": []}
+        return self._parse_maps(text)
+
+    async def resolve_module_offset(self, module, offset):
+        # Absolute address (hex string) for module_base + offset, or None
+        try:
+            off = int(str(offset), 0)
+        except ValueError:
+            return None
+        for m in (await self.get_modules())["modules"]:
+            if m["name"] == module:
+                return hex(m["base"] + off)
+        return None
+
+    async def read_memory(self, address, length):
+        # Raw bytes for the hex viewer (capped at 4 KiB)
+        if self.is_scanning or not getattr(self, 'pid', None):
+            return None
+        try:
+            addr = int(str(address), 0)
+        except ValueError:
+            return None
+        length = max(1, min(int(length), 4096))
+        buf = (c_uint8 * length)()
+        async with self._scanmem_lock:
+            ok = await asyncio.to_thread(
+                self.scanmem.read_array, self.pid, addr, buf, length)
+        if not ok:
+            return None
+        return {"address": hex(addr), "start": addr, "bytes": list(bytes(buf))}
+
+    async def write_address(self, address, value, value_type):
+        # Write a value to an arbitrary address (workbench edit)
+        if self.is_scanning:
+            return False
+        write_type = self._WRITE_TYPES.get(value_type)
+        if write_type is None:
+            logger.error("Cannot write unsupported type: %s", value_type)
+            return False
+        async with self._scanmem_lock:
+            return self.scanmem.exec_command(
+                "write %s %s %s" % (write_type, address, value))
+
+    def _tables_path(self):
+        base = decky.DECKY_PLUGIN_SETTINGS_DIR if decky is not None \
+            else os.path.dirname(__file__)
+        return os.path.join(base, "tables.json")
+
+    def _table_key(self):
+        # Prefer SteamAppId; fall back to process name so non-Steam apps work
+        return (getattr(self, 'app_id', None)
+                or getattr(self, 'process_name', None) or "default")
+
+    def _load_all_tables(self):
+        try:
+            with open(self._tables_path(), "r") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def _save_all_tables(self, data):
+        path = self._tables_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)  # atomic on POSIX
+
+    async def save_table(self, entries):
+        data = self._load_all_tables()
+        data[self._table_key()] = {
+            "name": getattr(self, 'process_name', None),
+            "app_id": getattr(self, 'app_id', None),
+            "entries": entries,
+        }
+        self._save_all_tables(data)
+        return True
+
+    async def load_table(self):
+        return self._load_all_tables().get(self._table_key(), {}).get("entries", [])
+
+    async def add_table_entry(self, entry):
+        # Append one entry to the saved table (used by "Add to Workbench")
+        entries = await self.load_table()
+        entries.append(entry)
+        await self.save_table(entries)
+        return True
+
+    async def has_saved_table(self):
+        return self._table_key() in self._load_all_tables()
+
+    async def delete_table(self):
+        data = self._load_all_tables()
+        if self._table_key() in data:
+            del data[self._table_key()]
+            self._save_all_tables(data)
+        return True
+
     async def get_attached_process(self):
         # If self.pid and self.process_name exist
         if hasattr(self, 'pid') and hasattr(self, 'process_name'):
-            pid = self.pid
-            name = self.process_name
+            return {
+                "pid": self.pid,
+                "name": self.process_name,
+                "app_id": getattr(self, 'app_id', None),
+            }
         # If they don't exist, return None
-        else:
-            return None
-
-        return {"pid": pid, "name": name}
+        return None
 
     async def reset_scanmem(self):
         if self.is_scanning:
@@ -241,6 +398,7 @@ class Plugin:
         logger.info("Attaching to process %s", pid)
         self.pid = pid
         self.process_name = name
+        self.app_id = self._read_app_id(pid)
 
         # Frozen addresses belong to the previous process; empty the dict
         # first so the freeze loop starts no new write batches, then switch
